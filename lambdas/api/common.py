@@ -39,7 +39,7 @@ def _user_groups(event):
     if not raw:
         return []
 
-    # HTTP API serializes arrays as "[a b]" or "[a, b]" — brackets, no quotes.
+    # HTTP API serializes arrays as "[a b]" or "[a, b]" - brackets, no quotes.
     if raw.startswith("[") and raw.endswith("]"):
         # Try real JSON first in case it's the well-formed variant.
         try:

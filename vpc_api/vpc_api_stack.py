@@ -176,11 +176,19 @@ class VpcApiStack(Stack):
             conditions={"StringLike": {"ec2:ResourceTag/vpc-api:jobId": "*"}},
         ))
 
-        # CreateSubnet: require the tag to be present in the request.
+        # CreateSubnet on the new subnet resource: require our tag to be applied at creation time.
         create_subnet_task.add_to_role_policy(iam.PolicyStatement(
             actions=["ec2:CreateSubnet"],
-            resources=["*"],
+            resources=["arn:aws:ec2:*:*:subnet/*"],
             conditions={"StringLike": {"aws:RequestTag/vpc-api:jobId": "*"}},
+        ))
+        # CreateSubnet on the parent VPC resource: require the VPC to already carry our tag.
+        # AWS evaluates ec2:CreateSubnet against both the subnet being created and the parent
+        # VPC, so both resources need an explicit allow with matching conditions.
+        create_subnet_task.add_to_role_policy(iam.PolicyStatement(
+            actions=["ec2:CreateSubnet"],
+            resources=["arn:aws:ec2:*:*:vpc/*"],
+            conditions={"StringLike": {"ec2:ResourceTag/vpc-api:jobId": "*"}},
         ))
         # CreateTags at subnet-creation time only.
         create_subnet_task.add_to_role_policy(iam.PolicyStatement(
