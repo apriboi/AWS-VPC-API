@@ -1,4 +1,4 @@
-#Main CDK stack: Cognito, DynamoDB, Lambdas, Step Functions, HTTP API."""
+#Main CDK stack: Cognito, DynamoDB, Lambdas, Step Functions, HTTP API.
 from aws_cdk import (
     Duration,
     RemovalPolicy,
@@ -343,6 +343,7 @@ class VpcApiStack(Stack):
             "STATE_MACHINE_ARN": state_machine.state_machine_arn,
             "OWNER_INDEX_NAME": "byOwner",
             "TEAM_INDEX_NAME": "byTeam",
+            "DEFAULT_AZ": f"{self.region}a",
         }
 
         create_vpc_api = _lambda.Function(
@@ -430,6 +431,7 @@ class VpcApiStack(Stack):
             environment={
                 "TABLE_NAME": table.table_name,
                 "ADD_SUBNETS_STATE_MACHINE_ARN": add_subnets_state_machine.state_machine_arn,
+                "DEFAULT_AZ": f"{self.region}a",
             },
             log_group=logs.LogGroup(
                 self,

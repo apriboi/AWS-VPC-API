@@ -12,6 +12,8 @@ from common import ADMIN_GROUP, _owner_sub, _primary_group, _response, _user_gro
 ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
 
+DEFAULT_AZ = os.environ.get("DEFAULT_AZ") or None
+
 TABLE = ddb.Table(os.environ["TABLE_NAME"])
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 
@@ -55,7 +57,7 @@ def _validate(payload: dict) -> tuple[dict | None, str | None]:
         normalized_subnets.append(
             {
                 "cidrBlock": s_cidr,
-                "availabilityZone": s_az or "eu-north-1a",
+                "availabilityZone": s_az or DEFAULT_AZ,
                 "name": s.get("name") or f"subnet-{i}",
             }
         )

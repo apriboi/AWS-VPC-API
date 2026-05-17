@@ -9,13 +9,14 @@ from ipaddress import ip_network
 import boto3
 from botocore.exceptions import ClientError
 
-from common import ADMIN_GROUP, _owner_sub, _response, _user_groups
+from common import ADMIN_GROUP, _owner_sub, _primary_group, _response, _user_groups
 
 ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
 
 TABLE = ddb.Table(os.environ["TABLE_NAME"])
 ADD_SUBNETS_STATE_MACHINE_ARN = os.environ["ADD_SUBNETS_STATE_MACHINE_ARN"]
+DEFAULT_AZ = os.environ.get("DEFAULT_AZ") or None
 
 
 def _validate_subnets(new_subnets, vpc_cidr, existing_subnets):
@@ -53,7 +54,7 @@ def _validate_subnets(new_subnets, vpc_cidr, existing_subnets):
         normalized.append(
             {
                 "cidrBlock": s_cidr,
-                "availabilityZone": s.get("availabilityZone") or "eu-north-1a",
+                "availabilityZone": s.get("availabilityZone") or DEFAULT_AZ,
                 "name": s.get("name") or f"subnet-{len(existing_subnets) + i}",
             }
         )
@@ -87,7 +88,11 @@ def handler(event, context):
     if not item:
         return _response(404, {"error": "VPC record not found"})
 
-    if item.get("ownerSub") != owner:
+    user_team = _primary_group(event)
+    can_access = item.get("ownerSub") == owner or (
+        user_team and item.get("team") == user_team
+    )
+    if not can_access:
         return _response(404, {"error": "VPC record not found"})
 
     status = item.get("status")
@@ -104,18 +109,23 @@ def handler(event, context):
     if err:
         return _response(400, {"error": err})
 
-    # Mark as UPDATING to block concurrent modifications
+    # Atomically transition SUCCEEDED → UPDATING; rejects concurrent requests that
+    # already flipped the status, preventing double-execution of the workflow.
     try:
         TABLE.update_item(
             Key={"vpcId": vpc_id},
-            UpdateExpression="SET #s = :s, updatedAt = :u",
+            UpdateExpression="SET #s = :updating, updatedAt = :u",
+            ConditionExpression="#s = :succeeded",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
-                ":s": "UPDATING",
+                ":updating": "UPDATING",
+                ":succeeded": "SUCCEEDED",
                 ":u": datetime.now(timezone.utc).isoformat(),
             },
         )
     except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _response(409, {"error": "VPC is already being modified"})
         return _response(500, {"error": f"DynamoDB error: {e.response['Error']['Code']}"})
 
     sfn_input = {
