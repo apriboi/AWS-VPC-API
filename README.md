@@ -209,6 +209,7 @@ Keep calling this every few seconds until "status" shows "SUCCEEDED".
 List all vpc your team has created
 
 curl "$API_URL/vpcs" -H "Authorization: Bearer $TOKEN"
+
 Add more subnets to an existing vpc
 
 curl -X POST "$API_URL/vpcs/$JOB_ID/subnets" \
