@@ -10,6 +10,37 @@ This project is a web service that lets your team create and manage VPCs in AWS.
 
 ---
 
+## Repo layout
+
+```
+AWS-VPC-API/
+├── app.py                          # CDK entry point — sets region and instantiates the stack
+├── cdk.json                        # CDK toolkit configuration
+├── requirements.txt                # Python dependencies
+│
+├── vpc_api/
+│   └── vpc_api_stack.py            # All AWS infrastructure (Cognito, DynamoDB, API Gateway, IAM, Step Functions)
+│
+└── lambdas/
+    ├── api/                        # HTTP-facing handlers (one file per route)
+    │   ├── common.py               # Shared helpers: response formatter, identity/group checker
+    │   ├── create_vpc.py           # POST /vpcs
+    │   ├── get_vpc.py              # GET  /vpcs/{id}
+    │   ├── list_vpcs.py            # GET  /vpcs
+    │   ├── add_subnets.py          # POST /vpcs/{id}/subnets
+    │   ├── delete_subnet.py        # DELETE /vpcs/{id}/subnets/{subnetId}
+    │   └── delete_vpc.py           # DELETE /vpcs/{id}
+    │
+    └── workflow/                   # Step Functions tasks (run in the background, never called directly)
+        ├── create_vpc_resource.py  # Creates the VPC in AWS and enables DNS
+        ├── create_subnets.py       # Creates one subnet (runs up to 10 in parallel)
+        ├── finalize.py             # Writes SUCCEEDED/FAILED result for VPC creation
+        ├── finalize_add_subnets.py # Writes SUCCEEDED/FAILED result for subnet addition
+        └── reconcile_vpcs.py       # Scheduled reconciler — syncs DB state with actual AWS state
+```
+
+---
+
 ## Project files
 
 ### `app.py`
@@ -130,6 +161,16 @@ Writes the final verdict for subnet addition, with slightly different behaviour 
 
 - **Success:** appends the new subnets to the existing list in the database, clears any previous error, marks the record `SUCCEEDED`
 - **Failure:** marks the record back to `SUCCEEDED` (because the VPC itself is still intact and working, only the new subnets weren't added), but saves the error in a `lastError` field so the caller can see what went wrong
+
+### `lambdas/workflow/reconcile_vpcs.py`
+
+Keeps the database in sync with actual AWS state. Runs automatically every 5 minutes via an EventBridge schedule — it is never called directly.
+
+On each run it scans for all `SUCCEEDED` records that have a real AWS VPC ID, then does a single bulk describe of all API-managed VPCs and subnets in AWS (identified by the `vpc-api:jobId` tag). For each database record it then:
+
+- **VPC missing from AWS** — someone deleted it outside the API. Marks the record `DELETED` and stamps `reconciledAt`.
+- **Subnet list differs** — subnets were added or removed outside the API. Overwrites the `subnets` list in the database with the real AWS state and stamps `reconciledAt`.
+- **Everything matches** — stamps `reconciledAt` only, so you can see when the record was last verified.
 
 ---
 
