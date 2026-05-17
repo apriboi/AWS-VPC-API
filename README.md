@@ -133,7 +133,7 @@ Each deployment:
 # 1. Create a Python environment and install dependencies
 python -m venv .venv
 source .venv/bin/activate        # Mac/Linux
-# .venv\Scripts\activate         # Windows
+.venv\Scripts\activate         # Windows
 
 pip install -r requirements.txt
 
