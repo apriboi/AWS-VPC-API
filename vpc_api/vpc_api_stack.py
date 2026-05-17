@@ -9,6 +9,8 @@ from aws_cdk import (
     aws_apigatewayv2_integrations as apigwv2_integrations,
     aws_cognito as cognito,
     aws_dynamodb as ddb,
+    aws_events as events,
+    aws_events_targets as event_targets,
     aws_iam as iam,
     aws_lambda as _lambda,
     aws_logs as logs,
@@ -182,9 +184,9 @@ class VpcApiStack(Stack):
             resources=["arn:aws:ec2:*:*:subnet/*"],
             conditions={"StringLike": {"aws:RequestTag/vpc-api:jobId": "*"}},
         ))
+        
         # CreateSubnet on the parent VPC resource: require the VPC to already carry our tag.
-        # AWS evaluates ec2:CreateSubnet against both the subnet being created and the parent
-        # VPC, so both resources need an explicit allow with matching conditions.
+        # AWS evaluates ec2:CreateSubnet against both the subnet being created and the parent VPC, so both resources need an explicit allow with matching conditions.
         create_subnet_task.add_to_role_policy(iam.PolicyStatement(
             actions=["ec2:CreateSubnet"],
             resources=["arn:aws:ec2:*:*:vpc/*"],
@@ -344,7 +346,26 @@ class VpcApiStack(Stack):
         )
 
         # ------------------------------------------------------------------
-        # 5. API Lambdas
+        # 5. Background reconciler
+        # ------------------------------------------------------------------
+        reconcile_fn = _lambda.Function(
+            self,
+            "ReconcileVpcsFn",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="reconcile_vpcs.handler",
+            code=_lambda.Code.from_asset("lambdas/workflow"),
+            timeout=Duration.minutes(5),
+            environment={"TABLE_NAME": table.table_name},
+            log_group=logs.LogGroup(
+                self,
+                "ReconcileVpcsFnLogs",
+                retention=logs.RetentionDays.ONE_WEEK,
+                removal_policy=RemovalPolicy.DESTROY,
+            ),
+        )
+
+        # ------------------------------------------------------------------
+        # 6. API Lambdas
         # ------------------------------------------------------------------
         api_env = {
             "TABLE_NAME": table.table_name,
@@ -457,8 +478,9 @@ class VpcApiStack(Stack):
         )
 
         table.grant_read_write_data(create_vpc_api)
-        table.grant_read_data(get_vpc_api)
+        table.grant_read_write_data(get_vpc_api)
         table.grant_read_data(list_vpcs_api)
+        table.grant_read_write_data(reconcile_fn)
         table.grant_read_write_data(delete_vpc_api)
         table.grant_read_write_data(delete_subnet_api)
         table.grant_read_write_data(add_subnets_api)
@@ -468,6 +490,22 @@ class VpcApiStack(Stack):
 
         delete_vpc_api.add_to_role_policy(ec2_delete_policy)
         delete_subnet_api.add_to_role_policy(ec2_delete_policy)
+
+        # DescribeVpcs/DescribeSubnets cannot be scoped to specific resources.
+        ec2_describe_policy = iam.PolicyStatement(
+            actions=["ec2:DescribeVpcs", "ec2:DescribeSubnets"],
+            resources=["*"],
+        )
+        get_vpc_api.add_to_role_policy(ec2_describe_policy)
+        reconcile_fn.add_to_role_policy(ec2_describe_policy)
+
+        # EventBridge rule — trigger the reconciler every 5 minutes.
+        reconcile_rule = events.Rule(
+            self,
+            "ReconcileSchedule",
+            schedule=events.Schedule.rate(Duration.minutes(5)),
+        )
+        reconcile_rule.add_target(event_targets.LambdaFunction(reconcile_fn))
 
         # ------------------------------------------------------------------
         # 6. HTTP API + Cognito JWT authorizer
